@@ -1,0 +1,75 @@
+import pandas as pd
+import numpy as np
+from google.cloud import bigquery
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, precision_score
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Initialize BigQuery client (assumes credentials are set up)
+client = bigquery.Client()
+
+# Query NYC Taxi data from BigQuery
+query = """
+SELECT
+    trip_distance,
+    EXTRACT(HOUR FROM pickup_datetime) AS pickup_hour,
+    fare_amount,
+    total_amount,
+    CASE WHEN (total_amount - fare_amount) / fare_amount > 0.2 THEN 1 ELSE 0 END AS high_tip
+FROM
+    `bigquery-public-data.new_york_taxi_trips.tlc_yellow_trips_2017`
+WHERE
+    trip_distance > 0 AND fare_amount > 0 AND total_amount > 0
+LIMIT 100000
+"""
+df = client.query(query).to_dataframe()
+
+# Feature engineering
+df['rush_hour'] = df['pickup_hour'].apply(lambda x: 1 if x in [7, 8, 9, 16, 17, 18] else 0)
+features = ['trip_distance', 'fare_amount', 'rush_hour']
+X = df[features]
+y = df['high_tip']
+
+# Split data
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Train Random Forest model
+model = RandomForestClassifier(n_estimators=100, random_state=42)
+model.fit(X_train, y_train)
+
+# Predict and evaluate
+y_pred = model.predict(X_test)
+accuracy = accuracy_score(y_test, y_pred)
+precision = precision_score(y_test, y_pred)
+
+print(f"Accuracy: {accuracy:.2f}")
+print(f"Precision: {precision:.2f}")
+
+# Feature importance plot
+feature_importance = pd.DataFrame({
+    'Feature': features,
+    'Importance': model.feature_importances_
+})
+plt.figure(figsize=(10, 6))
+sns.barplot(x='Importance', y='Feature', hue='Feature', data=feature_importance, palette='viridis', legend=False)
+plt.title('Feature Importance for Predicting Generous Tips')
+plt.xlabel('Importance Score')
+plt.ylabel('Features')
+plt.savefig('images/feature_importance.png', dpi=300, bbox_inches='tight')
+plt.close()
+
+# Tip distribution plot
+tip_counts = df['high_tip'].value_counts(normalize=True) * 100
+tip_data = pd.DataFrame({
+    'Tip Category': ['Generous (>20%)', 'Non-Generous (<20%)'],
+    'Percentage': [tip_counts[1], tip_counts[0]]
+})
+plt.figure(figsize=(8, 6))
+sns.barplot(x='Tip Category', y='Percentage', hue='Tip Category', data=tip_data, palette=['#1f77b4', '#ff7f0e'], legend=False)
+plt.title('Distribution of Generous vs. Non-Generous Tippers')
+plt.ylabel('Percentage (%)')
+plt.xlabel('Tip Category')
+plt.savefig('images/tip_distribution.png', dpi=300, bbox_inches='tight')
+plt.close()
